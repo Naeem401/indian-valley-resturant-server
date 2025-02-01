@@ -73,6 +73,54 @@ app.get('/user/:email', async (req, res) => {
   }
 });
 
+// Route to get a user by ID
+app.get('/users/:id', async (req, res) => {
+  const id = req.params.id; // Get the ID from the URL parameter
+
+  try {
+    // Convert the ID to an ObjectId
+    const query = { _id: new ObjectId(id) };
+
+    // Find the user in the database
+    const user = await usersCollection.findOne(query);
+
+    if (user) {
+      // If the user is found, send the user data
+      res.send(user);
+    } else {
+      // If the user is not found, send a 404 response
+      res.status(404).send({ message: 'User not found!' });
+    }
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).send({ message: 'Failed to fetch user' });
+  }
+});
+
+// Route to delete a user by ID
+app.delete('/users/:id', async (req, res) => {
+  const id = req.params.id; // Get the ID from the URL parameter
+
+  try {
+    // Convert the ID to an ObjectId
+    const query = { _id: new ObjectId(id) };
+
+    // Delete the user from the database
+    const result = await usersCollection.deleteOne(query);
+
+    if (result.deletedCount === 1) {
+      // If the user is deleted, send a success message
+      res.send({ message: 'User deleted successfully!' });
+    } else {
+      // If the user is not found, send a 404 response
+      res.status(404).send({ message: 'User not found!' });
+    }
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).send({ message: 'Failed to delete user' });
+  }
+});
+
 // Route to save item data to the menu collection
 app.post('/menu', async (req, res) => {
   const item = req.body; // Item data from the frontend
@@ -109,10 +157,10 @@ app.post('/menu', async (req, res) => {
   }
 });
 
-// Route to update a menu item by ID
-app.put('/menu/:id', async (req, res) => {
+/// Route to partially update a menu item by ID
+app.patch('/menu/:id', async (req, res) => {
   const id = req.params.id; // Get the ID from the URL parameter
-  const updatedItem = req.body; // Updated item data from the frontend
+  const updatedFields = req.body; // Fields to update from the frontend
 
   try {
     // Convert the ID to an ObjectId
@@ -120,7 +168,7 @@ app.put('/menu/:id', async (req, res) => {
 
     // Define the update operation
     const updateDoc = {
-      $set: updatedItem, // Update all fields with the new data
+      $set: updatedFields, // Update only the fields provided
     };
 
     // Update the item in the menu collection
