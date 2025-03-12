@@ -1,205 +1,347 @@
-const express = require('express');
+// server.js
+const express = require("express");
+const cors = require("cors");
+require("dotenv").config();
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
 const app = express();
-const cors = require('cors');
-require('dotenv').config();
 const port = process.env.PORT || 5000;
 
-
-//middileware
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+// MongoDB Connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.47zrhkq.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
-    // await client.connect();
-    const menuCollection = client.db("ivr").collection("menu");
-    const usersCollection = client.db('ivr').collection('users');
+    await client.connect();
+    console.log("Connected to MongoDB");
 
+    const db = client.db("ivr");
+    const menuCollection = db.collection("menu");
+    const usersCollection = db.collection("users");
+    const cartsCollection = db.collection("carts");
+    const ordersCollection = db.collection("orders");
 
-    app.get('/menu', async(req, res) => {
-        const result = await menuCollection.find().toArray();
-        res.send(result)
-    })
-   // Route to save user data
-   app.post('/users', async (req, res) => {
-    const user = req.body; // User data from the frontend
+    // Add this endpoint to create a payment intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { total } = req.body;
+    
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: total * 100, // Convert to halalas (100 halalas = 1 SAR)
+          currency: "sar", // Use SAR instead of USD
+          payment_method_types: ["card"],
+        });
+    
+        res.send({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        console.error("Error creating payment intent:", error);
+        res.status(500).send({ message: "Failed to create payment intent" });
+      }
+    });
 
-    // Check if the user already exists in the database
-    const query = { email: user.email }; // Assuming email is unique for each user
-    const existingUser = await usersCollection.findOne(query);
-
-    if (existingUser) {
-      // If the user already exists, send a response indicating that
-      return res.status(400).send({ message: 'User already exists!' });
-    }
-
-    // If the user doesn't exist, save the user data
-    const result = await usersCollection.insertOne(user);
-    res.send(result);
-  });
-
-  // Route to get all users
-  app.get('/users', async (req, res) => {
-    const result = await usersCollection.find().toArray();
-    res.send(result);
-  });
-
-// Route to get a user by email
-app.get('/user/:email', async (req, res) => {
-  const email = req.params.email; // Get the email from the URL parameter
-  const query = { email: email }; // Create a query to find the user by email
-  const user = await usersCollection.findOne(query);
-
-  if (user) {
-    // If the user is found, send the user data
-    res.send(user);
-  } else {
-    // If the user is not found, send a 404 response
-    res.status(404).send({ message: 'User not found!' });
-  }
-});
-
-// Route to get a user by ID
-app.get('/users/:id', async (req, res) => {
-  const id = req.params.id; // Get the ID from the URL parameter
-
+    // Admin Stats Endpoint
+app.get("/admin-stats", async (req, res) => {
   try {
-    // Convert the ID to an ObjectId
-    const query = { _id: new ObjectId(id) };
+    const totalUsers = await usersCollection.countDocuments();
+    const totalOrders = await ordersCollection.countDocuments();
+    const totalSalesResult = await ordersCollection.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalSales: { $sum: "$total" },
+        },
+      },
+    ]).toArray();
 
-    // Find the user in the database
-    const user = await usersCollection.findOne(query);
+    const totalSales = totalSalesResult.length > 0 ? totalSalesResult[0].totalSales : 0;
 
-    if (user) {
-      // If the user is found, send the user data
-      res.send(user);
-    } else {
-      // If the user is not found, send a 404 response
-      res.status(404).send({ message: 'User not found!' });
-    }
+    res.send({ totalUsers, totalSales, totalOrders });
   } catch (error) {
-    console.error('Error fetching user:', error);
-    res.status(500).send({ message: 'Failed to fetch user' });
+    console.error("Error fetching admin stats:", error);
+    res.status(500).send({ message: "Failed to fetch admin stats" });
   }
 });
 
-// Route to delete a user by ID
-app.delete('/users/:id', async (req, res) => {
-  const id = req.params.id; // Get the ID from the URL parameter
+    // ==================== MENU ENDPOINTS ====================
+    app.get("/menu", async (req, res) => {
+      const result = await menuCollection.find().toArray();
+      res.send(result);
+    });
 
-  try {
-    // Convert the ID to an ObjectId
-    const query = { _id: new ObjectId(id) };
+    app.post("/menu", async (req, res) => {
+      const item = req.body;
+      const result = await menuCollection.insertOne(item);
+      res.send(result);
+    });
 
-    // Delete the user from the database
-    const result = await usersCollection.deleteOne(query);
+    app.delete("/menu/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await menuCollection.deleteOne(query);
+      res.send(result);
+    });
 
-    if (result.deletedCount === 1) {
-      // If the user is deleted, send a success message
-      res.send({ message: 'User deleted successfully!' });
-    } else {
-      // If the user is not found, send a 404 response
-      res.status(404).send({ message: 'User not found!' });
-    }
-  } catch (error) {
-    console.error('Error deleting user:', error);
-    res.status(500).send({ message: 'Failed to delete user' });
-  }
-});
+    app.patch("/menu/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedFields = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = { $set: updatedFields };
+      const result = await menuCollection.updateOne(query, updateDoc);
+      res.send(result);
+    });
 
-// Route to save item data to the menu collection
-app.post('/menu', async (req, res) => {
-  const item = req.body; // Item data from the frontend
+    // ==================== USER ENDPOINTS ====================
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      const query = { email: user.email };
+      const existingUser = await usersCollection.findOne(query);
 
-  try {
-    // Save the item to the menu collection
-    const result = await menuCollection.insertOne(item);
-    res.send(result);
-  } catch (error) {
-    console.error('Error saving item:', error);
-    res.status(500).send({ message: 'Failed to save item' });
-  }
-});
+      if (existingUser) {
+        return res.status(400).send({ message: "User already exists" });
+      }
 
- // Route to delete a menu item by ID
- app.delete('/menu/:id', async (req, res) => {
-  const id = req.params.id; // Get the ID from the URL parameter
+      const result = await usersCollection.insertOne(user);
+      const insertedUser = await usersCollection.findOne({ _id: result.insertedId });
+      res.send(insertedUser);
+    });
 
-  try {
-    // Convert the ID to an ObjectId
-    const query = { _id: new ObjectId(id) };
+    app.get("/user/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { email: email };
+      const user = await usersCollection.findOne(query);
 
-    // Delete the item from the menu collection
-    const result = await menuCollection.deleteOne(query);
+      if (user) {
+        res.send(user);
+      } else {
+        res.status(404).send({ message: "User not found" });
+      }
+    });
 
-    if (result.deletedCount === 1) {
-      res.send({ message: 'Item deleted successfully!' });
-    } else {
-      res.status(404).send({ message: 'Item not found!' });
-    }
-  } catch (error) {
-    console.error('Error deleting item:', error);
-    res.status(500).send({ message: 'Failed to delete item' });
-  }
-});
+    app.get("/users", async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
+    });
 
-/// Route to partially update a menu item by ID
-app.patch('/menu/:id', async (req, res) => {
-  const id = req.params.id; // Get the ID from the URL parameter
-  const updatedFields = req.body; // Fields to update from the frontend
+    app.delete("/users/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await usersCollection.deleteOne(query);
+      res.send(result);
+    });
 
-  try {
-    // Convert the ID to an ObjectId
-    const query = { _id: new ObjectId(id) };
+    // ==================== CART ENDPOINTS ====================
+    app.post("/cart", async (req, res) => {
+      const { userId, item } = req.body;
 
-    // Define the update operation
-    const updateDoc = {
-      $set: updatedFields, // Update only the fields provided
-    };
+      if (!userId) {
+        return res.status(400).send({ message: "User ID is required" });
+      }
 
-    // Update the item in the menu collection
-    const result = await menuCollection.updateOne(query, updateDoc);
+      try {
+        let cart = await cartsCollection.findOne({ userId });
 
-    if (result.matchedCount === 1) {
-      res.send({ message: 'Item updated successfully!' });
-    } else {
-      res.status(404).send({ message: 'Item not found!' });
-    }
-  } catch (error) {
-    console.error('Error updating item:', error);
-    res.status(500).send({ message: 'Failed to update item' });
-  }
-});
+        if (cart) {
+          const existingItem = cart.items.find((i) => i.itemId === item.itemId);
+          if (existingItem) {
+            existingItem.quantity += item.quantity;
+          } else {
+            cart.items.push(item);
+          }
+          await cartsCollection.updateOne(
+            { userId },
+            { $set: { items: cart.items } }
+          );
+        } else {
+          await cartsCollection.insertOne({
+            userId,
+            items: [item],
+            createdAt: new Date(),
+          });
+        }
 
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        const updatedCart = await cartsCollection.findOne({ userId });
+        res.send(updatedCart);
+      } catch (error) {
+        console.error("Error adding item to cart:", error);
+        res.status(500).send({ message: "Failed to add item to cart" });
+      }
+    });
+
+    app.get("/cart/:userId", async (req, res) => {
+      const userId = req.params.userId;
+      const cart = await cartsCollection.findOne({ userId });
+      res.send(cart || { items: [] });
+    });
+
+    app.patch("/cart/:userId/item/:itemId", async (req, res) => {
+      const { userId, itemId } = req.params;
+      const { newQuantity } = req.body;
+
+      try {
+        const cart = await cartsCollection.findOne({ userId });
+        if (!cart) return res.status(404).send({ message: "Cart not found" });
+
+        const itemIndex = cart.items.findIndex((i) => i.itemId === itemId);
+        if (itemIndex === -1) {
+          return res.status(404).send({ message: "Item not found in cart" });
+        }
+
+        if (newQuantity <= 0) {
+          cart.items.splice(itemIndex, 1);
+        } else {
+          cart.items[itemIndex].quantity = newQuantity;
+        }
+
+        if (cart.items.length === 0) {
+          await cartsCollection.deleteOne({ userId });
+        } else {
+          await cartsCollection.updateOne(
+            { userId },
+            { $set: { items: cart.items } }
+          );
+        }
+
+        const updatedCart = await cartsCollection.findOne({ userId }) || { items: [] };
+        res.send(updatedCart);
+      } catch (error) {
+        console.error("Error updating cart:", error);
+        res.status(500).send({ message: "Failed to update cart" });
+      }
+    });
+
+    app.delete("/cart/:userId/item/:itemId", async (req, res) => {
+      const { userId, itemId } = req.params;
+
+      try {
+        const cart = await cartsCollection.findOne({ userId });
+        if (!cart) return res.status(404).send({ message: "Cart not found" });
+
+        const updatedItems = cart.items.filter((i) => i.itemId !== itemId);
+        
+        if (updatedItems.length === 0) {
+          await cartsCollection.deleteOne({ userId });
+        } else {
+          await cartsCollection.updateOne(
+            { userId },
+            { $set: { items: updatedItems } }
+          );
+        }
+
+        res.send({ message: "Item removed successfully" });
+      } catch (error) {
+        console.error("Error removing item:", error);
+        res.status(500).send({ message: "Failed to remove item" });
+      }
+    });
+
+    app.delete("/cart/:userId", async (req, res) => {
+      const userId = req.params.userId;
+      await cartsCollection.deleteOne({ userId });
+      res.send({ message: "Cart cleared successfully" });
+    });
+
+    // ==================== ORDER ENDPOINTS ====================
+    app.post("/orders", async (req, res) => {
+      const { userId, items, total, type, paymentMethod, mobileNumber, deliveryAddress, numberOfPeople, pickupTime, customerName, customerEmail, customerAddress } = req.body;
+      const order = {
+        userId,
+        items,
+        total,
+        status: "pending",
+        type,
+        paymentMethod,
+        mobileNumber,
+        ...(deliveryAddress && { deliveryAddress }),
+        ...(numberOfPeople && { numberOfPeople }),
+        ...(pickupTime && { pickupTime }),
+        customerName,
+        customerEmail,
+        customerAddress,
+        createdAt: new Date(),
+      };
+      await ordersCollection.insertOne(order);
+      await cartsCollection.deleteOne({ userId });
+      res.send({ message: "Order placed successfully" });
+    });
+
+    app.get("/orders", async (req, res) => {
+      const result = await ordersCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.get("/orders/:userId", async (req, res) => {
+      const userId = req.params.userId;
+      const result = await ordersCollection.find({ userId }).toArray();
+      res.send(result);
+    });
+
+    app.patch("/orders/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = { $set: { status } };
+      await ordersCollection.updateOne(query, updateDoc);
+      res.send({ message: "Order status updated" });
+    });
+
+    app.get("/orders-with-users", async (req, res) => {
+      try {
+        const orders = await ordersCollection.aggregate([
+          {
+            $addFields: {
+              userIdObj: { $toObjectId: "$userId" } // Convert userId (string) to ObjectId
+            }
+          },
+          {
+            $lookup: {
+              from: "users", // The collection to join with
+              localField: "userIdObj", // The converted ObjectId field
+              foreignField: "_id", // The _id field in the users collection
+              as: "user" // The name of the joined array
+            }
+          },
+          { $unwind: "$user" }, // Unwind the joined user array
+          {
+            $addFields: {
+              // Add fields from the joined user document
+              customerName: "$user.name",
+              customerEmail: "$user.email",
+              customerAddress: "$user.address"
+            }
+          },
+          { $project: { user: 0, userIdObj: 0 } } // Remove unnecessary fields
+        ]).toArray();
+    
+        res.send(orders);
+      } catch (error) {
+        console.error("Error fetching orders with users:", error);
+        res.status(500).send({ message: "Failed to fetch orders" });
+      }
+    });
+    
+    // ==================== START SERVER ====================
+    app.get("/", (req, res) => {
+      res.send("Indian Valley Restaurant Server is Running");
+    });
+
+    app.listen(port, () => {
+      console.log(`Server is running on port ${port}`);
+    });
   } finally {
-    // Ensures that the client will close when you finish/error
     // await client.close();
   }
 }
+
 run().catch(console.dir);
-
-
-app.get('/', (req, res) => {
-    res.send('Indian-Valley-Resturant Server is Running')
-})
-
-app.listen(port, () => {
-    console.log(`Indian Valley Resturant is Running Port ${port}`)
-})
